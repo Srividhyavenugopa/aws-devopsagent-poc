@@ -435,26 +435,50 @@ aws logs delete-metric-filter \
   --filter-name ErrorCount \
   --region us-east-1
 
+# ECS task execution IAM role (detach policy first, then delete)
+aws iam detach-role-policy \
+  --role-name hello-devops-ecs-task-execution \
+  --policy-arn arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy 2>/dev/null || true
+aws iam delete-role --role-name hello-devops-ecs-task-execution 2>/dev/null || true
+
 # GitHub Actions IAM role
 aws iam delete-role-policy \
   --role-name github-actions-hello-devops \
   --policy-name CloudWatchReadAccess 2>/dev/null || true
-
 aws iam detach-role-policy \
   --role-name github-actions-hello-devops \
   --policy-arn arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPowerUser 2>/dev/null || true
-
 aws iam detach-role-policy \
   --role-name github-actions-hello-devops \
   --policy-arn arn:aws:iam::aws:policy/AmazonECS_FullAccess 2>/dev/null || true
-
-aws iam delete-role --role-name github-actions-hello-devops
+aws iam delete-role --role-name github-actions-hello-devops 2>/dev/null || true
 
 # GitHub OIDC provider
 OIDC_ARN=$(aws iam list-open-id-connect-providers \
   --query 'OpenIDConnectProviderList[?contains(Arn,`token.actions.githubusercontent.com`)].Arn' \
   --output text)
-aws iam delete-open-id-connect-provider --open-id-connect-provider-arn $OIDC_ARN
+aws iam delete-open-id-connect-provider --open-id-connect-provider-arn $OIDC_ARN 2>/dev/null || true
+
+# Security groups (VPC endpoints security group and ECS tasks security group)
+# These may be deleted by terraform destroy — only run if they remain
+aws ec2 describe-security-groups \
+  --filters "Name=group-name,Values=hello-devops-ecs-tasks,hello-devops-vpc-endpoints" \
+  --region us-east-1 \
+  --query 'SecurityGroups[*].[GroupId,GroupName]' \
+  --output table
+
+# If any remain, delete them:
+# aws ec2 delete-security-group --group-id <GROUP_ID> --region us-east-1
+
+# VPC endpoints (if terraform destroy didn't remove them)
+aws ec2 describe-vpc-endpoints \
+  --filters "Name=tag:Name,Values=hello-devops*" \
+  --region us-east-1 \
+  --query 'VpcEndpoints[*].[VpcEndpointId,ServiceName,State]' \
+  --output table
+
+# If any remain with state != deleted:
+# aws ec2 delete-vpc-endpoints --vpc-endpoint-ids <ENDPOINT_ID> --region us-east-1
 ```
 
 ### 8d: Delete the AWS DevOps Agent Space
