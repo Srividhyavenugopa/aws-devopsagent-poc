@@ -1,0 +1,10 @@
+{
+  "name": "hello-aws-devops",
+  "version": "1.0.0",
+  "description": "Simple Hello World app for AWS DevOps learning",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "test": "node -e \"require('./app.js')\" && echo 'App loads OK'"
+  }
+}
