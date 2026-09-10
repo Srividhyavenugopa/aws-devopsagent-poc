@@ -105,6 +105,9 @@ docker push $ECR_URL:latest
 
 ## Step 4: Configure GitHub Actions with IAM Role (OIDC — no access keys needed)
 
+> **Corporate AWS accounts:** `sts:AssumeRoleWithWebIdentity` is often blocked by an SCP at the org level.
+> If you hit this, **skip to [Step 5 → Option A](#step-5-deploy-the-app)** and push manually using your SSO credentials instead.
+
 This project uses GitHub OIDC to assume an IAM role — no long-lived credentials.
 Your personal Azure AD SSO login is separate from this; GitHub Actions gets its own trust.
 
@@ -151,16 +154,30 @@ In your GitHub repo go to **Settings > Secrets and variables > Actions** and add
 
 ---
 
-## Step 5: Trigger a Deploy
+## Step 5: Deploy the App
 
-Make any change and push:
+> **Note:** GitHub Actions OIDC (`sts:AssumeRoleWithWebIdentity`) may be blocked by an SCP in corporate AWS accounts. Use the manual push approach below instead.
+
+### Option A: Manual push using local SSO credentials (recommended for POC)
+
+```bash
+cd /Users/srividhya.venugopal/Documents/GitHubPersonal/aws-devopsagent-poc/scripts
+chmod +x push-image.sh
+./push-image.sh
+```
+
+This builds the Docker image, pushes it to ECR, and triggers an ECS redeploy using your existing Azure SSO credentials.
+
+### Option B: GitHub Actions (requires SCP allow for sts:AssumeRoleWithWebIdentity)
+
+Push any change to trigger the pipeline:
 ```bash
 echo "# trigger deploy" >> app/app.js
 git add . && git commit -m "trigger deploy"
 git push
 ```
 
-Watch the GitHub Actions tab — it will build and push the Docker image automatically.
+If you see `Not authorized to perform sts:AssumeRoleWithWebIdentity`, ask your AWS admin to allow `sts:AssumeRoleWithWebIdentity` in the organization SCP for your account.
 
 ---
 
@@ -174,22 +191,108 @@ AWS DevOps Agent is a standalone service that uses an **Agent Space** architectu
 2. Click **Create Agent Space**
 3. Give it a name (e.g. `hello-devops-space`)
 4. Select the **AWS account** the agent should have access to
-5. Set **access boundaries** — at minimum grant read access to:
-   - CloudWatch Logs (log group `/ecs/hello-devops`)
-   - ECS (cluster `hello-devops-cluster`)
+5. AWS will auto-create IAM roles and begin **topology mapping** — this discovers relationships between your resources (ECS, CloudWatch, VPC, etc.)
+6. Wait for the status to show **"Topology mapping complete"** — the count shows how many resource relationships were discovered
 
-### 6b: Connect Integrations
+The Agent Space has 4 tabs:
+- **Capabilities** — add external sources (Azure, etc.)
+- **Web app** — access the Operator Web App + manage user access
+- **Configuration** — view the agent's IAM role and settings
+- **Summary report** — overview of investigations and findings
 
-Inside your Agent Space, configure integrations:
+### 6b: Add Capabilities to your Agent Space
 
-| Integration | Purpose |
-|---|---|
-| Amazon CloudWatch | Read logs, metrics, traces for root cause analysis |
-| GitHub | (Optional) Auto-create PRs with fixes |
-| Slack | (Optional) Auto-create incident channels |
-| Jira / ServiceNow | (Optional) Auto-generate tickets |
+In your Agent Space, click **Add a capability**. This is where you register **external** sources. AWS-native services (CloudWatch, ECS, X-Ray) are automatically available within the same AWS account — no capability registration needed for them.
 
-### 6c: Configure Agent Behavior
+---
+
+#### Amazon CloudWatch (automatic — no setup needed)
+
+CloudWatch access is managed automatically by the `AWSServiceRoleForAIDevOps` service-linked role that AWS creates and manages. The agent discovers log groups, metrics, and alarms automatically during topology mapping — no manual IAM changes needed.
+
+To enable the agent's **own activity logs** (optional but recommended):
+
+1. Go to **Configuration tab > Log delivery > Add**
+2. Log type: `APPLICATION_LOGS`
+3. Destination log group: accept the default `/aws/vendedlogs/aidevops/...` (created automatically)
+4. Click **Add**
+
+To allow the agent to take **remediation actions** (not just read/investigate):
+
+1. Go to **Configuration tab > Agent actions**
+2. Toggle **Enable agent actions** ON
+3. First add an Agent Actions role on the **Capabilities tab**
+4. Every action the agent proposes requires your explicit approval before it runs
+
+---
+
+#### Azure Cloud (optional — for multi-cloud investigations)
+
+If your app spans AWS and Azure:
+
+1. Click **Add a capability > Azure Cloud > Register**
+2. Provide your Azure tenant ID and authorize the connection
+3. Note: *Registration provides access to all Agent Spaces* in the account
+
+---
+
+#### Other capabilities
+
+Search **Add a capability** for available sources — the list includes third-party observability platforms, ticketing systems, and communication tools depending on your account's enabled features. Available options vary by region and whether your account has opted into preview features.
+
+### 6c: Set Up CloudWatch Alarm to Auto-Trigger Investigations
+
+This creates a custom metric filter on your app logs and a CloudWatch alarm. When the alarm fires, the DevOps Agent automatically starts an investigation.
+
+**Step 1: Create a metric filter on the app log group**
+
+```bash
+aws logs put-metric-filter \
+  --log-group-name /ecs/hello-devops \
+  --filter-name ErrorCount \
+  --filter-pattern "ERROR" \
+  --metric-transformations \
+    metricName=AppErrorCount,metricNamespace=HelloDevops,metricValue=1,defaultValue=0
+```
+
+This watches `/ecs/hello-devops` and increments a custom metric `HelloDevops/AppErrorCount` each time an ERROR line appears.
+
+**Step 2: Create a CloudWatch alarm on that metric**
+
+```bash
+aws cloudwatch put-metric-alarm \
+  --alarm-name hello-devops-errors \
+  --alarm-description "Fires when app errors detected — triggers DevOps Agent investigation" \
+  --metric-name AppErrorCount \
+  --namespace HelloDevops \
+  --statistic Sum \
+  --period 60 \
+  --evaluation-periods 1 \
+  --threshold 1 \
+  --comparison-operator GreaterThanOrEqualToThreshold \
+  --treat-missing-data notBreaching
+```
+
+**Step 3: Verify the alarm was created**
+
+```bash
+aws cloudwatch describe-alarms \
+  --alarm-names hello-devops-errors \
+  --query 'MetricAlarms[*].[AlarmName,StateValue]' \
+  --output table
+```
+
+It should show `INSUFFICIENT_DATA` (normal — no data yet). It will switch to `ALARM` when errors occur.
+
+**Step 4: Connect the alarm to your Agent Space**
+
+In the AWS DevOps Agent console:
+1. Go to your `hello-devops-space` Agent Space
+2. Under **Capabilities**, look for **CloudWatch Alarms** or **Alert sources**
+3. Add the alarm `hello-devops-errors` as a trigger
+4. The agent will now auto-start an investigation whenever the alarm fires
+
+### 6d: Configure Agent Behavior
 
 - **Alert Correlation**: enables automatic grouping of related CloudWatch alarms into single incidents
 - **Root Cause Analysis**: AI-powered investigation across metrics, logs, and traces
@@ -197,31 +300,38 @@ Inside your Agent Space, configure integrations:
 
 ### 6d: Access the Operator Web App
 
-The Agent Space has two interfaces:
-- **AWS Management Console**: admin configuration
-- **Operator Web App**: where your ops team runs investigations and reviews recommendations
+1. In your Agent Space go to the **Web app** tab
+2. Under **Operator access**, click **"Launch via IAM"**
+3. This opens the Operator Web App — a separate UI where your ops team runs investigations, reviews RCA reports, and sees recommendations
+4. Sessions via this link are limited to 8 hours
 
-Open the Operator Web App URL shown in your Agent Space dashboard — this is where you'll trigger investigations in Step 8.
+> For team access, configure **User access** on the same tab — choose either AWS IAM Identity Center or an external identity provider (Okta, Entra ID).
 
 ---
 
 ## Step 7: Inject a Fault (DevOps Agent Exercise)
 
-Copy the broken app over the good one:
+Copy the broken app over the good one and redeploy:
 ```bash
 cp fault/app-with-fault.js app/app.js
-git add . && git commit -m "inject fault for devops agent exercise"
-git push
+cd scripts && ./push-image.sh
 ```
 
-The app will crash randomly. CloudWatch will log errors like:
-```
-ERROR: Simulated fault triggered!
+The app will crash randomly. Within ~60 seconds you should see:
+- CloudWatch log group `/ecs/hello-devops` receiving ERROR entries
+- The `hello-devops-errors` alarm switching from `OK` to `ALARM`
+
+Check alarm state:
+```bash
+aws cloudwatch describe-alarms \
+  --alarm-names hello-devops-errors \
+  --query 'MetricAlarms[*].[AlarmName,StateValue,StateReason]' \
+  --output table
 ```
 
 Then in the **Operator Web App** for your Agent Space:
 
-1. Click **New Investigation** (or wait for the agent to auto-detect the CloudWatch alarm)
+1. Click **New Investigation** (or wait — if the alarm is connected to the Agent Space it will auto-trigger)
 2. Ask in natural language:
    > "App is crashing intermittently. Check CloudWatch log group /ecs/hello-devops and perform root cause analysis."
 3. The agent will:
