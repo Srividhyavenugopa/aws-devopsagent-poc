@@ -405,17 +405,64 @@ Then in the **Operator Web App** for your Agent Space:
 
 ## Step 8: Tear Down (avoid AWS charges)
 
-```bash
-cd terraform
-terraform destroy   # type 'yes' to confirm
-```
-
-Also delete the ECR images first if destroy fails:
+### 8a: Delete ECR image first (required before terraform destroy)
 ```bash
 aws ecr batch-delete-image \
   --repository-name hello-devops \
-  --image-ids imageTag=latest
+  --image-ids imageTag=latest \
+  --region us-east-1
 ```
+
+### 8b: Destroy Terraform-managed resources
+```bash
+cd /Users/srividhya.venugopal/Documents/GitHubPersonal/aws-devopsagent-poc/terraform
+terraform destroy   # type 'yes' to confirm
+```
+
+### 8c: Delete manually created resources
+
+These were created outside Terraform and must be deleted separately:
+
+```bash
+# CloudWatch alarm
+aws cloudwatch delete-alarms \
+  --alarm-names hello-devops-errors \
+  --region us-east-1
+
+# CloudWatch metric filter
+aws logs delete-metric-filter \
+  --log-group-name /ecs/hello-devops \
+  --filter-name ErrorCount \
+  --region us-east-1
+
+# GitHub Actions IAM role
+aws iam delete-role-policy \
+  --role-name github-actions-hello-devops \
+  --policy-name CloudWatchReadAccess 2>/dev/null || true
+
+aws iam detach-role-policy \
+  --role-name github-actions-hello-devops \
+  --policy-arn arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPowerUser 2>/dev/null || true
+
+aws iam detach-role-policy \
+  --role-name github-actions-hello-devops \
+  --policy-arn arn:aws:iam::aws:policy/AmazonECS_FullAccess 2>/dev/null || true
+
+aws iam delete-role --role-name github-actions-hello-devops
+
+# GitHub OIDC provider
+OIDC_ARN=$(aws iam list-open-id-connect-providers \
+  --query 'OpenIDConnectProviderList[?contains(Arn,`token.actions.githubusercontent.com`)].Arn' \
+  --output text)
+aws iam delete-open-id-connect-provider --open-id-connect-provider-arn $OIDC_ARN
+```
+
+### 8d: Delete the AWS DevOps Agent Space
+
+In the AWS Console:
+1. Go to **AWS DevOps Agent**
+2. Select your `hello-devops-space` Agent Space
+3. Click **Actions > Delete Agent Space**
 
 ---
 

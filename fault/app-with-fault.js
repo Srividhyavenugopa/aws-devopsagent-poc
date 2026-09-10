@@ -1,12 +1,13 @@
 const http = require('http');
 
-const server = http.createServer((req, res) => {
-  // Simulated fault: crashes 50% of requests
-  if (Math.random() < 0.5) {
-    console.error('ERROR: Simulated fault triggered!');
-    throw new Error('Simulated fault - use DevOps Agent to find and fix this!');
-  }
+// Simulated fault: logs errors on a timer every 15 seconds
+// Works even without external traffic hitting the app
+setInterval(() => {
+  console.error('ERROR: Simulated fault triggered!');
+  console.error('Error: Unhandled exception in request handler - memory leak detected');
+}, 15000);
 
+const server = http.createServer((req, res) => {
   if (req.url === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ status: 'ok', timestamp: new Date().toISOString() }));
