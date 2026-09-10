@@ -115,6 +115,55 @@ resource "aws_security_group" "ecs_tasks" {
   }
 }
 
+# Security group for VPC endpoints
+resource "aws_security_group" "vpc_endpoints" {
+  name        = "${var.app_name}-vpc-endpoints"
+  description = "Allow HTTPS from ECS tasks to VPC endpoints"
+  vpc_id      = data.aws_vpc.default.id
+
+  ingress {
+    from_port       = 443
+    to_port         = 443
+    protocol        = "tcp"
+    security_groups = [aws_security_group.ecs_tasks.id]
+  }
+}
+
+# VPC Endpoints so ECS can pull from ECR without internet access
+resource "aws_vpc_endpoint" "ecr_api" {
+  vpc_id              = data.aws_vpc.default.id
+  service_name        = "com.amazonaws.${var.aws_region}.ecr.api"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = data.aws_subnets.default.ids
+  security_group_ids  = [aws_security_group.vpc_endpoints.id]
+  private_dns_enabled = true
+}
+
+resource "aws_vpc_endpoint" "ecr_dkr" {
+  vpc_id              = data.aws_vpc.default.id
+  service_name        = "com.amazonaws.${var.aws_region}.ecr.dkr"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = data.aws_subnets.default.ids
+  security_group_ids  = [aws_security_group.vpc_endpoints.id]
+  private_dns_enabled = true
+}
+
+resource "aws_vpc_endpoint" "s3" {
+  vpc_id            = data.aws_vpc.default.id
+  service_name      = "com.amazonaws.${var.aws_region}.s3"
+  vpc_endpoint_type = "Gateway"
+  route_table_ids   = data.aws_vpc.default.main_route_table_id != null ? [data.aws_vpc.default.main_route_table_id] : []
+}
+
+resource "aws_vpc_endpoint" "logs" {
+  vpc_id              = data.aws_vpc.default.id
+  service_name        = "com.amazonaws.${var.aws_region}.logs"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = data.aws_subnets.default.ids
+  security_group_ids  = [aws_security_group.vpc_endpoints.id]
+  private_dns_enabled = true
+}
+
 # ECS Service
 resource "aws_ecs_service" "hello" {
   name            = "${var.app_name}-service"

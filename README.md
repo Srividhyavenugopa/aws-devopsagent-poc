@@ -166,7 +166,44 @@ chmod +x push-image.sh
 ./push-image.sh
 ```
 
-This builds the Docker image, pushes it to ECR, and triggers an ECS redeploy using your existing Azure SSO credentials.
+This builds the Docker image for AMD64 (required for ECS Fargate), pushes it to ECR, and triggers an ECS redeploy using your existing Azure SSO credentials.
+
+> **Mac Apple Silicon note:** ECS Fargate runs on AMD64. The Dockerfile and push script are already configured with `--platform linux/amd64` to handle this automatically.
+
+### Verify the app is running
+
+Watch for the task to start (runningCount should become 1):
+```bash
+aws ecs describe-services \
+  --cluster hello-devops-cluster \
+  --services hello-devops-service \
+  --region us-east-1 \
+  --query 'services[*].[runningCount,pendingCount]' \
+  --output table
+```
+
+Get the public IP and test the app:
+```bash
+TASK_ARN=$(aws ecs list-tasks --cluster hello-devops-cluster --region us-east-1 --query 'taskArns[0]' --output text)
+
+ENI_ID=$(aws ecs describe-tasks \
+  --cluster hello-devops-cluster \
+  --tasks $TASK_ARN \
+  --region us-east-1 \
+  --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' \
+  --output text)
+
+PUBLIC_IP=$(aws ec2 describe-network-interfaces \
+  --network-interface-ids $ENI_ID \
+  --region us-east-1 \
+  --query 'NetworkInterfaces[0].Association.PublicIp' \
+  --output text)
+
+echo "App running at: http://$PUBLIC_IP:3000"
+curl http://$PUBLIC_IP:3000
+```
+
+If it responds, the app is running. Keep the IP handy — you'll use it in Step 7 to trigger crashes.
 
 ### Option B: GitHub Actions (requires SCP allow for sts:AssumeRoleWithWebIdentity)
 
@@ -323,14 +360,28 @@ cp fault/app-with-fault.js app/app.js
 cd scripts && ./push-image.sh
 ```
 
-The app will crash randomly. Within ~60 seconds you should see:
-- CloudWatch log group `/ecs/hello-devops` receiving ERROR entries
-- The `hello-devops-errors` alarm switching from `OK` to `ALARM`
+The app crashes on ~50% of requests. To trigger errors, send requests using the public IP from Step 5:
 
-Check alarm state:
+```bash
+# Send 20 requests to trigger crashes
+for i in {1..20}; do curl -s http://$PUBLIC_IP:3000; sleep 1; done
+```
+
+Watch CloudWatch logs in real time (**open a second terminal**):
+```bash
+aws logs tail /ecs/hello-devops --follow --region us-east-1
+```
+
+You'll see ERROR lines appearing:
+```
+ERROR: Simulated fault triggered!
+```
+
+Check alarm state — it should switch to `ALARM` within 60 seconds:
 ```bash
 aws cloudwatch describe-alarms \
   --alarm-names hello-devops-errors \
+  --region us-east-1 \
   --query 'MetricAlarms[*].[AlarmName,StateValue,StateReason]' \
   --output table
 ```
