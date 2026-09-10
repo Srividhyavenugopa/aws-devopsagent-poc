@@ -284,13 +284,19 @@ aws cloudwatch describe-alarms \
 
 It should show `INSUFFICIENT_DATA` (normal — no data yet). It will switch to `ALARM` when errors occur.
 
-**Step 4: Connect the alarm to your Agent Space**
+**Step 4: Verify the Agent Space can see the alarm**
 
-In the AWS DevOps Agent console:
-1. Go to your `hello-devops-space` Agent Space
-2. Under **Capabilities**, look for **CloudWatch Alarms** or **Alert sources**
-3. Add the alarm `hello-devops-errors` as a trigger
-4. The agent will now auto-start an investigation whenever the alarm fires
+No manual connection needed — since your Primary AWS account (`300428143068`) is already **Valid** in the Capabilities tab, the agent automatically has access to all CloudWatch alarms in that account including `hello-devops-errors`.
+
+To confirm:
+1. Go to your `hello-devops-space` Agent Space → **Capabilities** tab
+2. Under **Cloud > Primary source**, check the status shows **Valid**
+3. The agent will auto-detect the alarm when it fires and start an investigation
+
+> **Optional — enable agent remediation actions:**
+> The **Actions role status** may show "Not configured". Click **Edit** next to the Primary source to configure this — it allows the agent to take remediation steps (restart tasks, update services) with your explicit approval.
+>
+> **Telemetry sources** (Datadog, Dynatrace) are optional — not needed for this POC.
 
 ### 6d: Configure Agent Behavior
 
