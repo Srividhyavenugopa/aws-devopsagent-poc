@@ -405,15 +405,7 @@ Then in the **Operator Web App** for your Agent Space:
 
 ## Step 8: Tear Down (avoid AWS charges)
 
-### 8a: Delete ECR image first (required before terraform destroy)
-```bash
-aws ecr batch-delete-image \
-  --repository-name hello-devops \
-  --image-ids imageTag=latest \
-  --region us-east-1
-```
-
-### 8b: Destroy Terraform-managed resources
+### 8a: Destroy Terraform-managed resources
 ```bash
 cd /Users/srividhya.venugopal/Documents/GitHubPersonal/aws-devopsagent-poc/terraform
 terraform destroy   # type 'yes' to confirm
